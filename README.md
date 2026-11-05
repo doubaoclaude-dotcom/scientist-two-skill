@@ -48,6 +48,25 @@ test ! -e "$HOME/.agents/skills/scientist-two" && \
 
 Alternatively copy the skill directory into the target project's `.claude/skills/scientist-two` or `.agents/skills/scientist-two`, respectively. Keep `scripts/`, `examples/`, and `references/` with `SKILL.md`; do not install only the Markdown file. Claude Code invocation: `/scientist-two`. Codex invocation: `$scientist-two`. Discovery paths are verified against [Claude Code docs](https://code.claude.com/docs/en/skills) and [Codex docs](https://developers.openai.com/codex/skills/). Automatic discovery is enabled; optional Codex UI metadata is in `agents/openai.yaml`. No host-specific model is selected. Compatibility validation covers skill format, documented discovery paths, and portable scripts; interactive Claude Code/Codex research sessions have not been benchmarked.
 
+## Agensi companion
+
+[The Agensi entry](distribution/agensi.md) is a free, MIT-licensed, independent and unofficial planning/review companion. It works without installing the runtime: it provides frozen-protocol planning and S1–S5 evidence requirements, and reports **not executed; gates pending** when no execution has occurred. Optional real execution uses a separately obtained public checkout on existing authorized compute; see [Install](#install) and the [executor contract](references/executor-contract.md). Prefer the user's existing project/Python environment. Existing WSL2 or containers require checks for persistent POSIX storage and worker/process support before use; untested environments are not validated. The package does not provide a terminal, GPU, or hosted compute.
+
+[Listing copy](distribution/agensi-listing.md) accompanies this instruction-only ZIP. From the repository root, rebuild it with Python's standard library (only the entry and MIT license are included; no runtime):
+
+```sh
+python3 - <<'PY'
+from pathlib import Path
+from zipfile import ZipFile, ZIP_DEFLATED
+archive = Path('../output/agensi/scientist-two-agensi.zip')
+archive.parent.mkdir(parents=True, exist_ok=True)
+with ZipFile(archive, 'w', compression=ZIP_DEFLATED) as package:
+    package.write('distribution/agensi.md', 'SKILL.md')
+    package.write('LICENSE', 'LICENSE')
+print(archive.resolve())
+PY
+```
+
 ## Five-minute quickstart
 
 From a clean clone:

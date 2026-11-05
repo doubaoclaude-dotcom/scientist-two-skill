@@ -46,6 +46,25 @@ test ! -e "$HOME/.agents/skills/scientist-two" && \
 
 也可将技能目录复制到目标项目的 `.claude/skills/scientist-two` 或 `.agents/skills/scientist-two`。`scripts/`、`examples/`、`references/` 必须与 `SKILL.md` 一起安装。Claude Code 用 `/scientist-two` 调用，Codex 用 `$scientist-two` 调用。安装目录已按 [Claude Code 官方文档](https://code.claude.com/docs/en/skills)和 [Codex 官方文档](https://developers.openai.com/codex/skills/)核验。保留自动发现；`agents/openai.yaml` 提供可选的 Codex 界面信息，不指定模型供应商或模型。兼容性验证覆盖技能格式、官方发现路径和可移植脚本；尚未对 Claude Code/Codex 的实际交互科研会话做基准测试。
 
+## Agensi 规划与审阅入口
+
+[Agensi 入口](distribution/agensi.md)是免费、MIT 许可、独立非官方的规划与审阅指南。无需安装 runtime 即可完成冻结协议规划和 S1–S5 证据要求梳理；未执行时明确报告 **not executed; gates pending**。可选真实执行使用另行获取的公开仓库 checkout 和已有授权算力，参见[安装](#安装)及[执行协议](references/executor-contract.md)。优先复用用户已有项目/Python 环境；已有 WSL2 或容器需先检查持久 POSIX 存储及 worker/进程支持，未实测不能宣称已验证。此包不提供终端、GPU 或托管算力。
+
+[上架文案](distribution/agensi-listing.md)与以下纯说明 ZIP 配套。仓库根目录运行下面的标准库命令可重复打包；仅包含入口与 MIT 许可证，不捆绑 runtime：
+
+```sh
+python3 - <<'PY'
+from pathlib import Path
+from zipfile import ZipFile, ZIP_DEFLATED
+archive = Path('../output/agensi/scientist-two-agensi.zip')
+archive.parent.mkdir(parents=True, exist_ok=True)
+with ZipFile(archive, 'w', compression=ZIP_DEFLATED) as package:
+    package.write('distribution/agensi.md', 'SKILL.md')
+    package.write('LICENSE', 'LICENSE')
+print(archive.resolve())
+PY
+```
+
 ## 五分钟运行示例
 
 在干净克隆中执行：
