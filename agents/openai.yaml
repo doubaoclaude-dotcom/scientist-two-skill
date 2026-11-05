@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scientist Two"
+  short_description: "Evidence-driven research with recoverable experiments"
+  default_prompt: "Use $scientist-two to define a frozen research protocol and run a finite, auditable study."
