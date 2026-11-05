@@ -42,7 +42,7 @@ scheduler/API integration while preserving this contract. The adapter receives
 one JSON request on stdin and must exit after writing exactly one JSON object on
 stdout; diagnostics belong on stderr or in log files. Never mix banners with the
 protocol. It must durably implement all three operations, including stable IDs,
-source verification, and actual output hashes, before using it for research.
+process status, and valid result JSON, before using it for research.
 
 SSH/custom accept optional positive `request_timeout_seconds` (default 30). This
 bounds the transport call, not the experiment. A transport timeout, failed spawn,
@@ -59,22 +59,14 @@ fields raise `ValueError`. The controller records such errors as unknown outcome
   "job_root": "/srv/scientist/jobs",
   "cwd": "/srv/scientist/source",
   "argv": ["python3", "experiment.py", "--variant", "baseline", "--split", "development"],
-  "timeout_seconds": 30,
-  "input_manifest": {
-    "experiment.py": "replace-with-the-actual-64-character-lowercase-sha256"
-  }
+  "timeout_seconds": 30
 }
 ```
 
-The hash above is a placeholder and must be replaced. `input_manifest` is a
-nonempty mapping from relative, normalized source filenames to lowercase SHA-256
-digests. Absolute names, parent traversal and `.git` paths are rejected. The
-execution host resolves each file within `cwd`, requires a regular file, and
-hashes its bytes immediately before starting the command. Manifest mismatches
-produce `failed` without starting the experiment. Include every scientific
-source/config/evaluator file whose identity is being claimed. Files and their
-dependencies must remain immutable while running; a hash check is not a sandbox
-or a protection against concurrent edits after verification.
+No source hash manifest is required. The executor runs the prepared files in
+`cwd` without comparing their bytes to the controller's copy. The old
+`input_manifest` field has no validation role; deploy the intended source files
+explicitly before submitting a new job.
 
 `job_root` and `cwd` must be normalized absolute paths on the execution host.
 `job_id` matches `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`. `argv` is a nonempty array of
@@ -130,8 +122,7 @@ rejected. The worker requires both exit code zero and a valid result for success
   "job_dir": "/srv/scientist/jobs/study01-h01-screen-01",
   "exit_code": 0,
   "elapsed_seconds": 0.12,
-  "result": {"metrics": {"score": 0.75}},
-  "result_sha256": "replace-with-the-sha256-of-the-actual-result-file-bytes"
+  "result": {"metrics": {"score": 0.75}}
 }
 ```
 
@@ -139,15 +130,16 @@ rejected. The worker requires both exit code zero and a valid result for success
 | --- | --- | --- |
 | `preparing` | `exit_code: null`, finite nonnegative `elapsed_seconds` | Identity is reserved; preparation or launch is pending. |
 | `running` | `exit_code: null`, finite nonnegative `elapsed_seconds` | Worker is monitoring the experiment. |
-| `succeeded` | `exit_code: 0`, finite nonnegative `elapsed_seconds`, `result`, `result_sha256` | Process and result checks passed. |
-| `failed` | `exit_code` (integer or null before launch), finite nonnegative `elapsed_seconds`, diagnostic `error` from bundled worker | Nonzero exit, timeout, source mismatch, missing/corrupt result, or launch failure. |
+| `succeeded` | `exit_code: 0`, finite nonnegative `elapsed_seconds`, `result` | Process and result checks passed. |
+| `failed` | `exit_code` (integer or null before launch), finite nonnegative `elapsed_seconds`, diagnostic `error` from bundled worker | Nonzero exit, timeout, missing/corrupt result, or launch failure. |
 | `unknown` | Bundled endpoint supplies diagnostic `error` | Outcome cannot currently be verified; preserve identity and reconcile. |
 
 `status` and `collect` both return the current response; successful responses
-include the result. The bundled endpoint re-reads actual result bytes and verifies
-their saved hash on each call. Later modification/corruption returns `unknown`
-without erasing the original evidence. Custom adapters are trusted to attest the
-actual output hash; JSON formatting cannot be reconstructed from a parsed result.
+include the result. The bundled endpoint re-reads and validates result JSON on
+each call without comparing a saved hash. Missing or invalid JSON returns
+`unknown`; valid rewritten JSON is accepted. No `result_sha256` is required.
+The controller can still invalidate evidence when collected result values change;
+formatting-only edits do not count as a changed result.
 `collect` does not download arbitrary directories or logs from SSH hosts. Inspect
 the returned execution-host `job_dir` or explicitly copy an allowlist of artifacts.
 
@@ -168,7 +160,7 @@ This is process management, not containment against hostile code.
 
 The worker refreshes status while waiting. After ten seconds without a heartbeat,
 a nonterminal job is reported `unknown`. This can also happen during unusually
-slow source verification or filesystem stalls. A crashed worker, host reboot or
+slow filesystem operations or filesystem stalls. A crashed worker, host reboot or
 missing directory never proves that no compute started. Query/collect the same
 ID, inspect the persistent directory and resolve the cause; never infer failure
 from a lost response and automatically resubmit. There is no reboot supervisor,
@@ -188,11 +180,10 @@ scp examples/experiment.py compute-alias:/srv/scientist/source/experiment.py
 
 Exclude `.git`, datasets, weights, logs, generated results, credentials, local SSH
 configuration and private files. Provision datasets separately under an explicit
-data policy and record their identity in the frozen study protocol. Calculate
-the intended source hashes from the exact allowlisted files, and send those
-digests in `input_manifest`; the remote executor independently compares its
-actual bytes before launch. The submitter's Git commit alone does not demonstrate
-what ran remotely. Runtime libraries/interpreters also need separately recorded
+data policy and record their identity in the frozen study protocol. No source
+or result checksums need to be generated or transferred. Source identity is not
+automatically checked on the execution host; record the deployed version when
+needed by the study. Runtime libraries/interpreters also need separately recorded
 environment identity when required by the research protocol.
 
 The endpoint can be exercised without a controller:
@@ -206,7 +197,7 @@ Invalid requests exit with code 2 and diagnostics only on stderr. Successful
 protocol calls exit zero even when the experiment status is failed or unknown.
 
 `tests/test_executor.py` runs real local/custom success, failure, timeout,
-duplicate, identity, malformed-response and result-integrity checks; its SSH
+duplicate, identity, malformed-response and result-format checks; its SSH
 command/disconnect tests are explicitly simulated. The separate opt-in
 `tests/test_ssh_real.py` tests a real isolated localhost SSH server when available;
 it does not validate a cloud scheduler, GPU environment or external host.

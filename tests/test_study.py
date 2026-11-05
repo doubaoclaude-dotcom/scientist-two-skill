@@ -52,8 +52,11 @@ class StudyTests(unittest.TestCase):
         response = copy.deepcopy(self.responses.get(payload["job_id"], {"job_id": payload["job_id"], "status": "unknown"}))
         if response["status"] == "succeeded":
             path = Path(response["job_dir"]) / "result.json"
-            if not path.exists() or study.file_hash(path) != response["result_sha256"]:
-                return {"job_id": payload["job_id"], "status": "unknown", "error": "result integrity changed"}
+            try:
+                response["result"] = study.read_json(path)
+                study.executor._validate_result(response["result"])
+            except (OSError, ValueError):
+                return {"job_id": payload["job_id"], "status": "unknown", "error": "invalid result JSON"}
         return response
 
     def init(self):
@@ -66,7 +69,7 @@ class StudyTests(unittest.TestCase):
         path = directory / "result.json"
         path.write_text(json.dumps(result))
         response = {"job_id": job_id, "status": status, "exit_code": 0 if status == "succeeded" else 2,
-                    "result": result, "result_sha256": study.file_hash(path), "job_dir": str(directory), "elapsed_seconds": elapsed}
+                    "result": result, "job_dir": str(directory), "elapsed_seconds": elapsed}
         self.responses[job_id] = copy.deepcopy(response)
         return response
 
@@ -95,6 +98,7 @@ class StudyTests(unittest.TestCase):
         def request(config, payload):
             snapshot = study.read_json(self.state_path)
             self.assertEqual(payload["operation"], "submit")
+            self.assertNotIn("input_manifest", payload)
             self.assertEqual(snapshot["jobs"]["baseline"]["status"], "preparing")
             self.assertEqual(snapshot["budget"]["reserved_seconds"], 5)
             self.assertEqual(snapshot["budget"]["used_jobs"], 1)
@@ -200,11 +204,79 @@ class StudyTests(unittest.TestCase):
             state = study.submit_job(self.state_path, "baseline", "baseline", "run")
         self.assertEqual(state["jobs"]["baseline"]["status"], "unknown")
         self.assertEqual(state["budget"]["reserved_seconds"], 5)
-        response = self.response("missing-hash")
-        response.pop("result_sha256")
+        response = self.response("missing-result")
+        response.pop("result")
         with patch.object(study.executor, "request", return_value=response):
-            state = study.submit_job(self.state_path, "missing-hash", "baseline", "run")
-        self.assertEqual(state["jobs"]["missing-hash"]["status"], "unknown")
+            state = study.submit_job(self.state_path, "missing-result", "baseline", "run")
+        self.assertEqual(state["jobs"]["missing-result"]["status"], "unknown")
+
+    def test_source_manifest_is_optional_local_tracking(self):
+        self.config.pop("source_manifest")
+        state = self.pass_s1()
+        self.assertNotIn("source_manifest", state["config"])
+        self.assertNotIn("result_sha256", state["jobs"]["baseline"])
+        self.source.write_text("# Changed source is not tracked without an explicit manifest.\n")
+        self.assertEqual(study.get_status(self.state_path)["gates"]["S1"]["status"], "passed")
+        with patch.object(study.executor, "request", return_value=self.response("changed-source")) as request:
+            state = study.submit_job(self.state_path, "changed-source", "baseline", "run")
+        self.assertEqual(state["jobs"]["changed-source"]["status"], "succeeded")
+        self.assertNotIn("input_manifest", request.call_args.args[1])
+
+    def test_explicit_source_manifest_still_requires_valid_local_hashes(self):
+        self.assertEqual(study.frozen_config(self.config | {"source_manifest": {}})["source_manifest"], {})
+        for manifest in (None, [], {"experiment.py": "0" * 64}, {"../outside": "a" * 64}):
+            with self.subTest(manifest=manifest), self.assertRaises(study.StudyError):
+                study.frozen_config(self.config | {"source_manifest": manifest})
+
+    def test_legacy_result_hash_metadata_does_not_invalidate_gate(self):
+        state = self.pass_s1()
+        gate = copy.deepcopy(state["gates"]["S1"])
+        with study.Store(self.state_path) as store:
+            state = store.load()
+            state["jobs"]["baseline"]["result_sha256"] = "a" * 64
+            state["jobs"]["baseline"]["external_notes"] = "keep"
+            store.save(state, "legacy-metadata-fixture")
+        for fields in ({"result_sha256": "b" * 64}, {}, {"result_sha256": None}):
+            with self.subTest(fields=fields), patch.object(study.executor, "request",
+                    return_value=self.responses["baseline"] | fields):
+                state = study.reconcile_job(self.state_path, "baseline")
+                self.assertEqual(state["gates"]["S1"], gate)
+                self.assertEqual(state["gate_history"], [])
+                self.assertEqual(state["jobs"]["baseline"]["external_notes"], "keep")
+                self.assertEqual(state["budget"]["reserved_seconds"], 0)
+
+    def test_gate_tracks_structured_result_content_and_ignores_serialization(self):
+        state = self.pass_s1()
+        gate = copy.deepcopy(state["gates"]["S1"])
+        path = self.root / "jobs" / "baseline" / "result.json"
+        path.write_text(json.dumps(state["jobs"]["baseline"]["result"], indent=4) + "\n")
+        state = study.reconcile_job(self.state_path, "baseline")
+        self.assertEqual(state["gates"]["S1"], gate)
+        result = state["jobs"]["baseline"]["result"] | {"details": "changed"}
+        path.write_text(json.dumps(result))
+        state = study.reconcile_job(self.state_path, "baseline")
+        self.assertEqual(state["jobs"]["baseline"]["status"], "succeeded")
+        self.assertEqual(state["gates"]["S1"]["status"], "stale")
+        self.assertEqual(state["gate_history"][-1], gate)
+
+    def test_old_gate_fingerprint_becomes_stale_without_migrating_history(self):
+        state = self.pass_s1()
+        with study.Store(self.state_path) as store:
+            state = store.load()
+            state["jobs"]["baseline"]["result_sha256"] = "a" * 64
+            state["gates"]["S1"]["input_fingerprint"] = study.digest({
+                "version": state["version"], "evidence": state["evidence"]["S1"],
+                "jobs": {"baseline": "a" * 64}, "validator": state["config"]["validator"]})
+            state["external_notes"] = {"keep": True}
+            original = store.save(state, "legacy-gate-fixture")
+        changed = study.get_status(self.state_path)
+        self.assertEqual(changed["gates"]["S1"]["status"], "stale")
+        self.assertEqual(changed["gate_history"][-1], original["gates"]["S1"])
+        for field in ("version", "jobs", "budget", "external_notes", "evidence_history", "history"):
+            self.assertEqual(changed[field], original[field])
+        rerun = study.run_gate(self.state_path, "S1")
+        self.assertEqual(rerun["gates"]["S1"]["status"], "passed")
+        self.assertNotEqual(rerun["gates"]["S1"]["input_fingerprint"], original["gates"]["S1"]["input_fingerprint"])
 
     def test_user_passed_flag_does_not_replace_validator_recomputation(self):
         self.init()

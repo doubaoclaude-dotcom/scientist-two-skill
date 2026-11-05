@@ -75,7 +75,7 @@ python3 scripts/study.py --state /tmp/scientist-two-demo/state.json status
 
 ## 接入训练与评测
 
-参考示例生成的 `config.json` 和[完整配置/证据格式](references/workflow.md)，在第一次实验前固定目标、baseline、数据划分、主指标方向、最小实际收益、统计判据、保护指标、预算和停止条件。数据与评价器应具有明确哈希或版本身份。`source_manifest` 用相对文件名映射 SHA-256，覆盖命令使用的科学代码、评价器和配置。源码上传只允许显式清单；不默认上传数据、权重、日志、`.git`、生成结果或凭证。
+参考示例生成的 `config.json` 和[完整配置/证据格式](references/workflow.md)，在第一次实验前固定目标、baseline、数据划分、主指标方向、最小实际收益、统计判据、保护指标、预算和停止条件。记录数据和评价器版本即可，各执行模式均不要求源码或结果哈希。`source_manifest` 仅用于可选的控制器本地文件变化跟踪，不需要时可直接省略。源码上传只允许显式清单；不默认上传数据、权重、日志、`.git`、生成结果或凭证。
 
 `commands` 保存具名参数数组，提交时选择冻结的命令。实验应向环境变量 `SCIENTIST_RESULT_PATH` 指定的文件写入有限数值 JSON；`SCIENTIST_JOB_DIR` 可用于原始观测和日志。执行协议要求数值 `metrics.score`，其他具名指标可作为主指标或保护指标：
 
@@ -123,9 +123,9 @@ scp scripts/executor.py research-host:/srv/scientist/executor.py
 scp examples/experiment.py research-host:/srv/scientist/source/experiment.py
 ```
 
-按实际权限修改路径。`source_root` 指本地批准的源码树，`execution.cwd` 指远端对应目录；冻结相同相对文件哈希，并使用远端有效的命令路径。worker 在执行主机校验源码哈希后才运行，本地 Git commit 不自动证明远端代码身份。没有自动整目录镜像或删除同步。可选 `config_file` 使用绝对路径指定已有 SSH 配置，映射为 `ssh -F`；保持主机验证，认证由现有 SSH 设施提供。
+按实际权限修改路径。`source_root` 指本地批准的源码树，`execution.cwd` 指远端对应目录；使用远端有效的命令路径即可。worker 直接运行已部署的文件，不再校验远端源码或结果哈希；本地 Git commit 不自动证明远端代码身份。没有自动整目录镜像或删除同步。可选 `config_file` 使用绝对路径指定已有 SSH 配置，映射为 `ssh -F`；保持主机验证，认证由现有 SSH 设施提供。升级已有部署时，也要把新版 `scripts/executor.py` 复制到远端执行入口；旧版远端脚本仍要求哈希校验。
 
-配置后仍使用相同的 `init`、`submit`、`reconcile` 命令。`collect` 返回结果 JSON，远端原始文件仍在远端。**本地验证器若需要原始文件，必须显式收集允许的文件，并让验证器读取本地副本**；也可使用支持远端读取的验证器。两种方式均应记录哈希和来源。此版本不是通用的远端文件下载器。
+配置后仍使用相同的 `init`、`submit`、`reconcile` 命令。`collect` 返回结果 JSON，远端原始文件仍在远端。**本地验证器若需要原始文件，必须显式收集允许的文件，并让验证器读取本地副本**；也可使用支持远端读取的验证器。记录收集文件的来源即可，不要求远端计算校验和。此版本不是通用的远端文件下载器。
 
 **custom：通过参数数组启动适配程序，stdin/stdout 交换一个 JSON 请求和响应**：
 
@@ -140,10 +140,10 @@ scp examples/experiment.py research-host:/srv/scientist/source/experiment.py
 ```
 
 ```json
-{"job_id":"study01-h01","status":"succeeded","exit_code":0,"elapsed_seconds":1.2,"job_dir":"/absolute/persistent/jobs/study01-h01","result":{"metrics":{"score":0.75}},"result_sha256":"<64 lowercase hex characters>"}
+{"job_id":"study01-h01","status":"succeeded","exit_code":0,"elapsed_seconds":1.2,"job_dir":"/absolute/persistent/jobs/study01-h01","result":{"metrics":{"score":0.75}}}
 ```
 
-stdout 只能放协议 JSON，诊断写 stderr 或日志。错误 ID、非法状态、超大响应、非有限数值及损坏 JSON 都会被拒绝。适配器须兑现真实哈希语义；仅有格式正确的声明哈希，不能防止适配器谎报。
+stdout 只能放协议 JSON，诊断写 stderr 或日志。错误 ID、非法状态、超大响应、非有限数值及损坏 JSON 都会被拒绝。适配器返回进程状态和有效结果 JSON 即可，不必计算或返回哈希。
 
 ## 门控、恢复和历史
 
@@ -163,7 +163,7 @@ stdout 只能放协议 JSON，诊断写 stderr 或日志。错误 ID、非法状
 
 ## 验证、限制与贡献
 
-执行 `python3 -m unittest discover -s tests -v`。测试覆盖 local/custom、非零退出、超时、缺失/损坏结果、重复 ID、unknown、预算与门控拒绝、版本漂移、事件/快照间中断恢复，以及完整五阶段软件链路。SSH 转义和断线有模拟测试，另在 macOS 上通过了真实隔离 localhost SSH 测试；它使用临时密钥和仅监听回环地址的服务，不修改用户 SSH 文件。可显式运行 `SCIENTIST_TEST_SSH=1 python3 -m unittest discover -s tests -p test_ssh_real.py -v`（需要 `sshd` 及启动权限），不代表真实云端环境已验证。CI 在 Linux 的 Python 3.10 和 3.14 下运行。测试证明软件行为，不证明科研结论。2026-11-05 在 Python 3.10.20 和 3.14.6 上分别发现 38 项测试，默认运行均为 37 项通过、1 项可选 SSH 测试跳过；真实 SSH 测试已单独启用并通过。
+执行 `python3 -m unittest discover -s tests -v`。测试覆盖 local/custom、非零退出、超时、缺失/损坏结果、重复 ID、unknown、预算与门控拒绝、版本漂移、事件/快照间中断恢复，以及完整五阶段软件链路。SSH 转义和断线有模拟测试，另在 macOS 上通过了真实隔离 localhost SSH 测试；它使用临时密钥和仅监听回环地址的服务，不修改用户 SSH 文件。可显式运行 `SCIENTIST_TEST_SSH=1 python3 -m unittest discover -s tests -p test_ssh_real.py -v`（需要 `sshd` 及启动权限），不代表真实云端环境已验证。CI 在 Linux 的 Python 3.10 和 3.14 下运行。测试证明软件行为，不证明科研结论。
 
 当前版本为 POSIX 上单控制器、文件状态的轻量工作流，没有常驻 Agent 调度服务、真实模型基准、原生 Windows 支持、凭证管理器、数据集上传系统或自动远程产物下载。实验日志/数据没有磁盘配额控制。真实训练需要你确定数据规则、评价器、冻结基准和明确算力预算；外部命令依赖和运行环境也需单独记录可复现身份。
 

@@ -5,7 +5,6 @@ Reviewer declarations below are test fixtures, not real independent reviews.
 """
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import sys
@@ -27,8 +26,6 @@ def run_demo(directory, mode="local"):
     state_path = directory / "state.json"
     if state_path.exists():
         raise ValueError("demo output already has state.json; use a new directory")
-    manifest = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-                for name in ["examples/experiment.py", "examples/validator.py"]}
     commands = {}
     for kind in ["baseline", "smoke", "screen", "confirm", "ablation", "retest", "rebuttal", "final"]:
         variant = "baseline" if kind == "baseline" else "ablation" if kind == "ablation" else "candidate"
@@ -40,7 +37,7 @@ def run_demo(directory, mode="local"):
         executor["argv"] = [sys.executable, str(ROOT / "examples/custom_adapter.py")]
     config = {
         "study_id": "synthetic-arithmetic-demo", "author": "synthetic-fixture-author",
-        "source_root": str(ROOT), "source_manifest": manifest,
+        "source_root": str(ROOT),
         "identities": {"data": "Synthetic integer enumeration y=2*x+1; disjoint x ranges 0..2, 3..5, 6..8.",
                        "evaluator": "Pinned independent arithmetic recomputation in examples/validator.py."},
         "protocol": PROTOCOL,

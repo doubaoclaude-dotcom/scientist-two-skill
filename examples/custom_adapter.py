@@ -2,7 +2,7 @@
 """Runnable JSON adapter: delegate each request to the bundled local endpoint.
 
 Replace the subprocess with an authorized scheduler/API integration while keeping
-the same durable job identity, source verification and JSON response contract.
+the same durable job identity, process status and JSON response contract.
 """
 
 from pathlib import Path

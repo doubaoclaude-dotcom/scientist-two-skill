@@ -13,7 +13,7 @@ Resolve scripts relative to this skill directory. Read [workflow.md](references/
 
 Agree on the research goal, baseline, data splits, evaluator, primary metric direction, minimum practical improvement, statistical decision rule, guardrails, resource limits, and stopping conditions. Freeze the protocol and file identities before S1. Validate a baseline with the same protocol or explicitly establish a prior result's matching provenance.
 
-Choose local, SSH, or custom execution using existing authorized compute. An installed skill does not authorize paid compute, external publication, new credentials, or data transfers. Source preparation is an explicit allowlisted step; remote source hashes must be verified on the execution host. Never upload a whole working tree by default.
+Choose local, SSH, or custom execution using existing authorized compute. An installed skill does not authorize paid compute, external publication, new credentials, or data transfers. Source preparation is an explicit allowlisted step; deploy the intended files and use the correct execution directory. Executors do not require or compare source/result hashes. Never upload a whole working tree by default.
 
 ## Research cycle
 

@@ -36,6 +36,10 @@ class DemoTest(unittest.TestCase):
                 state = json.loads(Path(summary["state"]).read_text())
                 self.assertEqual(state["outcome"], "completed")
                 self.assertEqual(state["stage"], "complete")
+                self.assertNotIn("source_manifest", state["config"])
+                for job in state["jobs"].values():
+                    self.assertNotIn("input_manifest", job["request"])
+                    self.assertNotIn("result_sha256", job)
                 self.assertTrue(all(state["gates"][stage]["status"] == "passed" for stage in summary["gates"]))
                 self.assertTrue((Path(directory) / "jobs/final/observations.json").is_file())
                 duplicate = subprocess.run(

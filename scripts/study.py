@@ -223,8 +223,8 @@ def frozen_config(config):
     root = Path(absolute(config.get("source_root"), "source_root")).resolve()
     require(root.is_dir(), "source_root must exist")
     config["source_root"] = str(root)
-    manifest = config.get("source_manifest")
-    require(isinstance(manifest, dict) and manifest, "source_manifest must be nonempty")
+    manifest = config.get("source_manifest", {})
+    require(isinstance(manifest, dict), "source_manifest must be an object")
     for relative, expected in manifest.items():
         part = PurePosixPath(relative)
         require(not part.is_absolute() and relative == str(part) and ".." not in part.parts
@@ -333,7 +333,7 @@ def invalidate(state, start=0, reason="inputs changed"):
 def detect_drift(state):
     config = state["config"]
     expected = {str(Path(config["source_root"]) / relative): checksum
-                for relative, checksum in config["source_manifest"].items()}
+                for relative, checksum in config.get("source_manifest", {}).items()}
     expected.update(config["validator"]["file_hashes"])
     drift = []
     for path, checksum in expected.items():
@@ -370,7 +370,7 @@ def detect_drift(state):
 
 def input_fingerprint(state, evidence, jobs):
     return digest({"version": state["version"], "evidence": evidence,
-                   "jobs": {key: value.get("result_sha256") for key, value in jobs.items()},
+                   "jobs": {key: value.get("result") for key, value in jobs.items()},
                    "validator": state["config"]["validator"]})
 
 
@@ -423,8 +423,6 @@ def response_update(state, job, response):
         require(type(response.get("exit_code")) is int and response["exit_code"] == 0,
                 "successful job requires exit code zero")
         validate_metrics(response.get("result", {}).get("metrics"))
-        require(isinstance(response.get("result_sha256"), str)
-                and re.fullmatch("[0-9a-f]{64}", response["result_sha256"]), "missing result integrity hash")
         number(response.get("elapsed_seconds"), "elapsed_seconds")
         absolute(response.get("job_dir"), "job_dir")
     if status in TERMINAL:
@@ -449,7 +447,7 @@ def unknown(job, exc):
 
 def collect_job(state, job_id):
     job = state["jobs"][job_id]
-    before = digest({key: job.get(key) for key in ("status", "result_sha256", "result")})
+    before = digest({key: job.get(key) for key in ("status", "result")})
     request = {"operation": "collect", "job_id": job_id, "job_root": job["request"]["job_root"]}
     try:
         response_update(state, job, executor.request(job["executor"], request))
@@ -457,7 +455,7 @@ def collect_job(state, job_id):
         unknown(job, exc)
         if not job.get("reserved_seconds"):
             job["reserved_seconds"] = job["request"]["timeout_seconds"]
-    after = digest({key: job.get(key) for key in ("status", "result_sha256", "result")})
+    after = digest({key: job.get(key) for key in ("status", "result")})
     if before != after:
         for index, stage in enumerate(STAGES):
             if job_id in state["gates"][stage].get("job_ids", []):
@@ -485,8 +483,7 @@ def submit_job(state_path, job_id, kind, command, candidate=None, expected_revis
         check_budget(state, reserve=True)
         payload = {"operation": "submit", "job_id": job_id, "job_root": config["execution"]["job_root"],
                    "cwd": config["execution"]["cwd"], "argv": config["commands"][command],
-                   "timeout_seconds": config["budget"]["per_job_seconds"],
-                   "input_manifest": config["source_manifest"]}
+                   "timeout_seconds": config["budget"]["per_job_seconds"]}
         job = {"job_id": job_id, "kind": kind, "command": command, "candidate": candidate,
                "version": state["version"], "status": "preparing", "request": payload,
                "executor": copy.deepcopy(config["executor"]), "reserved_seconds": payload["timeout_seconds"],
@@ -558,7 +555,6 @@ def evidence_jobs(state, stage, evidence):
             require(job["version"] == state["version"], "job version mismatch")
             require(job["status"] == "succeeded" and job.get("exit_code") == 0, "job not successfully completed: " + job_id)
             validate_metrics(job.get("result", {}).get("metrics"))
-            require(job.get("result_sha256"), "job lacks result hash")
             jobs[job_id] = job
     if stage in ("S2", "S3", "S5"):
         baseline_id = state["evidence"]["S1"]["jobs"]["baseline"][0]

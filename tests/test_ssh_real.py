@@ -3,7 +3,6 @@
 Starts a temporary loopback-only sshd with disposable keys. Requires ssh, ssh-keygen,
 and sshd (SCIENTIST_SSHD may select its absolute path). No user SSH files are changed.
 """
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,7 +20,7 @@ import executor
 
 @unittest.skipUnless(os.environ.get("SCIENTIST_TEST_SSH") == "1", "opt-in real localhost SSH test")
 class RealSSHTest(unittest.TestCase):
-    def test_detached_job_collection_and_remote_source_check(self):
+    def test_detached_job_collection_without_hashes_and_changed_remote_source(self):
         sshd = os.environ.get("SCIENTIST_SSHD", shutil.which("sshd") or "/usr/sbin/sshd")
         with tempfile.TemporaryDirectory(prefix="scientist-ssh-") as temporary:
             root = Path(temporary).resolve()
@@ -57,8 +56,7 @@ class RealSSHTest(unittest.TestCase):
             config = {"mode": "ssh", "host": "scientist-loopback", "python": sys.executable,
                       "executor_path": str(Path(executor.__file__).resolve()), "config_file": str(client_config)}
             payload = {"operation": "submit", "job_id": "real-ssh", "job_root": str(root / "jobs"),
-                       "cwd": str(source), "argv": [sys.executable, str(program)], "timeout_seconds": 5,
-                       "input_manifest": {"experiment.py": hashlib.sha256(program.read_bytes()).hexdigest()}}
+                       "cwd": str(source), "argv": [sys.executable, str(program)], "timeout_seconds": 5}
             with (root / "sshd.log").open("w") as log:
                 server = subprocess.Popen([sshd, "-D", "-e", "-f", str(server_config)], stdout=log, stderr=log)
                 try:
@@ -83,17 +81,20 @@ class RealSSHTest(unittest.TestCase):
                         time.sleep(.1)
                     self.assertEqual(result["status"], "succeeded", result)
                     self.assertEqual(result["result"]["metrics"]["score"], .75)
-                    self.assertEqual(executor.request(config, payload)["result_sha256"], result["result_sha256"])
-                    altered = dict(payload, job_id="source-drift", input_manifest={"experiment.py": "0" * 64})
+                    self.assertNotIn("result_sha256", result)
+                    self.assertEqual(executor.request(config, payload)["result"], result["result"])
+                    program.write_text(program.read_text().replace("0.75", "0.5"))
+                    altered = dict(payload, job_id="source-drift")
                     executor.request(config, altered)
                     query["job_id"] = "source-drift"
                     deadline = time.monotonic() + 10
                     while time.monotonic() < deadline:
-                        invalid = executor.request(config, query)
-                        if invalid["status"] == "failed":
+                        changed = executor.request(config, query)
+                        if changed["status"] in {"succeeded", "failed"}:
                             break
                         time.sleep(.1)
-                    self.assertEqual(invalid["status"], "failed", invalid)
+                    self.assertEqual(changed["status"], "succeeded", changed)
+                    self.assertEqual(changed["result"]["metrics"]["score"], 0.5)
                 finally:
                     server.terminate()
                     server.wait(timeout=5)

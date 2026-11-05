@@ -37,13 +37,13 @@ Additional functions are `get_status`, `revise_study(state_path, config, reason)
 
 ## Freeze before S1
 
-The initialization configuration requires these fields:
+The initialization configuration uses these fields (optional fields are marked):
 
 | Field | Meaning |
 | --- | --- |
 | `study_id`, `author` | Stable study identifier and author identity declaration. |
 | `source_root` | Absolute controller-side directory containing the declared source files. |
-| `source_manifest` | Nonempty object mapping normalized relative file paths to lowercase SHA-256 hashes. No `..`, absolute paths, or `.git` entries. |
+| `source_manifest` (optional) | Controller-local source tracking: relative filenames mapped to SHA-256 hashes. Omit it or use an empty object to skip this tracking. If supplied, entries are checked locally; no `..`, absolute paths, or `.git` entries. It is not sent to executors. |
 | `identities.data`, `identities.evaluator` | Frozen data and evaluator identity descriptions or hashes; the project validator must verify their actual use. |
 | `protocol.objective`, `protocol.baseline` | Research target and baseline definition. |
 | `protocol.data_split` | Nonempty `development`, `confirmation`, and `final` split descriptions. |
@@ -60,15 +60,15 @@ The initialization configuration requires these fields:
 
 All configuration is stored in state and contributes to the version fingerprint. Initialization also hashes validator files, its executable, and existing file arguments. Changes to a declared source/validator file invalidate previous gates. Configuration edits take effect only through `revise`; an external configuration file is not a second state source.
 
-Declare all scientific source and evaluator implementation files. For large external datasets or pretrained weights, use an explicit immutable manifest and have the validator check it against the actual data/weights. A text identity description alone does not prove which bytes an experiment used. The core does not discover transitive imports, hash entire environments, copy datasets, or prove an undeclared dependency is unchanged. Include relevant configuration/manifest files explicitly and extend the project validator as needed.
+List evaluator implementation files in `validator.files`. Optional `source_manifest` entries track source files on the controller only. Record data/weight versions as needed by the study; the executor does not require their checksums. A text identity description alone does not prove which bytes an experiment used. The core does not discover transitive imports, hash entire environments, copy datasets, or prove an undeclared dependency is unchanged. Include relevant configuration/manifest files explicitly and extend the project validator as needed.
 
-For SSH, `source_root` is the controller's prepared copy, while `execution.cwd` is the separately deployed remote copy. The same relative-path SHA-256 manifest is checked on the execution host before starting. The controller's Git commit is not remote execution evidence. Configuration must not contain secrets; use existing SSH identities or environment-injected adapter authentication.
+For SSH, `source_root` is the controller's prepared copy, while `execution.cwd` is the separately deployed remote copy. The executor runs the prepared remote files without source or result hash verification. The controller's Git commit is not remote execution evidence. Configuration must not contain secrets; use existing SSH identities or environment-injected adapter authentication.
 
 ## State and budgets
 
 The snapshot contains schema/study/revision, the frozen `config` and content-derived `version`, `protocol_revision`, current `stage`, candidates, next action, blockers, jobs, current evidence, gate records, evidence/gate history, and all previous frozen configurations. Existing unrelated top-level fields survive initialization and later writes. Conflicting study fields are rejected.
 
-Each job records its stable ID, kind, command, candidate, version, original backend and request, execution state, result/hash/path, reserved budget, and actual charge. Job IDs remain permanently occupied, including failed and unknown jobs. To retain rejected directions or negative observations, record them in evidence artifacts/judgment fields; failed, OOM, timeout, missing-result, and no-gain jobs remain in the ledger.
+Each job records its stable ID, kind, command, candidate, version, original backend and request, execution state, result/path, reserved budget, and actual charge. Job IDs remain permanently occupied, including failed and unknown jobs. To retain rejected directions or negative observations, record them in evidence artifacts/judgment fields; failed, OOM, timeout, missing-result, and no-gain jobs remain in the ledger.
 
 The bundled unit is **elapsed job wall-seconds**, not CPU-seconds, GPU-seconds, GPU-hours, or a claim of hardware utilization. Every submission consumes one job and one iteration, and reserves its entire `per_job_seconds` allowance before calling the executor. A terminal collection releases the reservation and charges actual elapsed seconds. A terminal failure with unavailable elapsed time conservatively charges the full timeout. Unknown jobs retain reservations; a previously terminal job whose integrity becomes unknown conservatively reserves a timeout again without refunding prior work.
 
@@ -102,7 +102,7 @@ An evidence submission has this common envelope:
 
 The controller hashes actual artifact files on submission. It stores their paths/hashes, the supplied judgment, a content fingerprint, and a history record. Evidence from another version is rejected. Replacing evidence makes that stage and later signed-off gates stale. Changing a prior signed-off artifact also makes the earliest affected gate and later gates stale on status, submission, or gate checks.
 
-Each gate checks all prerequisites; current version; evidence artifacts; successfully completed jobs, exits, and result hashes; finite metrics; budget; the frozen validator; and required scientific judgment fields. It recollects jobs supporting the current and all preceding gates, so a prior result that has disappeared or become corrupt cannot silently support later stages. A remote host/adapter must be available for this freshness check.
+Each gate checks all prerequisites; current version; evidence artifacts; successfully completed jobs, exits, and collected result values; finite metrics; budget; the frozen validator; and required scientific judgment fields. It recollects jobs supporting the current and all preceding gates, so a prior result that has disappeared or become corrupt cannot silently support later stages. A remote host/adapter must be available for this freshness check. Gate fingerprints use the structured result, not an executor-provided checksum; JSON formatting changes alone do not invalidate them. After upgrading from the original checksum-based release, previously passed gate fingerprints become stale and are preserved in history. Rerun the affected gates against current evidence; job IDs and spent budget remain intact.
 
 | Stage | Required job kinds | Required validator checks | Required judgments |
 | --- | --- | --- | --- |

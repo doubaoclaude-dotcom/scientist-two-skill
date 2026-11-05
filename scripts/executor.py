@@ -2,11 +2,10 @@
 """Durable, dependency-free execution protocol. Python 3.10+, POSIX hosts."""
 
 import argparse
-import hashlib
 import json
 import math
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import shlex
 import signal
@@ -70,7 +69,7 @@ def _read(path):
         raise ValueError("JSON artifact must not be a symbolic link")
     with path.open("rb") as stream:
         raw = stream.read(MAX_JSON_BYTES + 1)
-    return _decode(raw), raw
+    return _decode(raw)
 
 
 def _write(path, value):
@@ -137,17 +136,6 @@ def _validate_payload(payload):
         _absolute(payload.get("cwd"), "cwd")
         _argv(payload.get("argv"))
         _number(payload.get("timeout_seconds"), "timeout_seconds", positive=True)
-        manifest = payload.get("input_manifest")
-        if not isinstance(manifest, dict) or not manifest:
-            raise ValueError("submit requires a nonempty input_manifest")
-        for filename, digest in manifest.items():
-            _text(filename, "manifest path")
-            relative = PurePosixPath(filename)
-            if (relative.is_absolute() or str(relative) != filename
-                    or any(part in {"..", ".git"} for part in relative.parts)):
-                raise ValueError("manifest paths must be relative files without traversal or .git")
-            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-                raise ValueError("manifest values must be lowercase SHA-256 digests")
 
 
 def _job_dir(payload):
@@ -195,9 +183,6 @@ def _validate_response(response, payload):
         if response["exit_code"] != 0:
             raise ValueError("succeeded job requires exit_code zero")
         _validate_result(response.get("result"))
-        if not isinstance(response.get("result_sha256"), str) or not re.fullmatch(
-                r"[0-9a-f]{64}", response["result_sha256"]):
-            raise ValueError("succeeded job requires a result_sha256")
     _encode(response)
     return response
 
@@ -207,7 +192,7 @@ def _inspect(payload):
     if not directory.is_dir() or directory.is_symlink():
         return _unknown(payload, "job directory missing or unsafe; do not resubmit")
     try:
-        status, _ = _read(directory / "status.json")
+        status = _read(directory / "status.json")
         if not isinstance(status.get("status"), str):
             raise ValueError("invalid persisted status")
         if status.get("status") not in TERMINAL:
@@ -216,10 +201,8 @@ def _inspect(payload):
                 return _unknown(payload, "worker heartbeat stale; reconcile this job, do not resubmit")
         status.pop("updated_at", None)
         if status.get("status") == "succeeded":
-            result, raw = _read(directory / "result.json")
+            result = _read(directory / "result.json")
             _validate_result(result)
-            if hashlib.sha256(raw).hexdigest() != status.get("result_sha256"):
-                raise ValueError("result changed after completion")
             status["result"] = result
         return _validate_response(status, payload)
     except (OSError, ValueError) as exc:
@@ -238,7 +221,7 @@ def _local(payload):
         if directory.is_symlink() or not directory.is_dir():
             return _unknown(payload, "existing job directory is unsafe; do not resubmit")
         try:
-            original, _ = _read(directory / "request.json")
+            original = _read(directory / "request.json")
         except (OSError, ValueError):
             return _unknown(payload, "existing job has no verifiable request; do not resubmit")
         if original != payload:
@@ -261,22 +244,6 @@ def _local(payload):
     return _inspect(payload)
 
 
-def _verify_inputs(payload):
-    cwd = Path(payload["cwd"]).resolve(strict=True)
-    if not cwd.is_dir():
-        raise ValueError("cwd must be a prepared directory")
-    for relative, expected in payload["input_manifest"].items():
-        source = (cwd / relative).resolve(strict=True)
-        if not source.is_relative_to(cwd) or not source.is_file():
-            raise ValueError("manifest file escapes cwd or is not a regular file")
-        digest = hashlib.sha256()
-        with source.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-        if digest.hexdigest() != expected:
-            raise ValueError("execution-host input hash mismatch: " + relative)
-
-
 def _terminate(process):
     # Kill only the experiment/transport session we created, including its children.
     for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -293,7 +260,7 @@ def _terminate(process):
 
 
 def _worker(directory):
-    payload, _ = _read(directory / "request.json")
+    payload = _read(directory / "request.json")
     _validate_payload(payload)
     if directory != _job_dir(payload):
         raise ValueError("worker directory does not match request")
@@ -311,7 +278,8 @@ def _worker(directory):
         _write(directory / "status.json", state)
 
     try:
-        _verify_inputs(payload)
+        if not Path(payload["cwd"]).resolve(strict=True).is_dir():
+            raise ValueError("cwd must be a prepared directory")
         environment = os.environ.copy()
         environment.update(SCIENTIST_JOB_DIR=str(directory),
                            SCIENTIST_RESULT_PATH=str(directory / "result.json"))
@@ -336,9 +304,9 @@ def _worker(directory):
                     pass
         if state["exit_code"] != 0:
             raise ValueError("experiment exited with nonzero status")
-        result, raw = _read(directory / "result.json")
+        result = _read(directory / "result.json")
         _validate_result(result)
-        state.update(status="succeeded", result_sha256=hashlib.sha256(raw).hexdigest())
+        state["status"] = "succeeded"
     except (OSError, ValueError) as exc:
         if process is not None and process.poll() is None:
             _terminate(process)

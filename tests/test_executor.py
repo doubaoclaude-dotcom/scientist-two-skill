@@ -1,7 +1,6 @@
 """Real local/custom executions; SSH unit tests explicitly simulate transport."""
 
 from concurrent.futures import ThreadPoolExecutor
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -41,8 +40,7 @@ class ExecutorTests(unittest.TestCase):
         target.write_text(script)
         return {"operation": "submit", "job_id": job_id, "job_root": str(self.root),
                 "cwd": str(self.source), "argv": [sys.executable, str(target)],
-                "timeout_seconds": timeout,
-                "input_manifest": {target.name: hashlib.sha256(target.read_bytes()).hexdigest()}}
+                "timeout_seconds": timeout}
 
     def query(self, payload, operation="status"):
         return {key: payload[key] for key in ("job_id", "job_root")} | {"operation": operation}
@@ -56,7 +54,7 @@ class ExecutorTests(unittest.TestCase):
             time.sleep(0.03)
         self.fail("job did not finish: " + repr(response))
 
-    def test_real_local_success_is_async_and_integrity_checked(self):
+    def test_real_local_success_is_async_and_collects_current_json_without_hashes(self):
         payload = self.payload("import time\ntime.sleep(0.4)\n" + SUCCESS)
         started = time.monotonic()
         initial = executor.request(self.config, payload)
@@ -67,10 +65,21 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(response["exit_code"], 0)
         self.assertEqual(response["result"]["metrics"]["score"], 0.75)
         directory = self.root / payload["job_id"]
-        self.assertEqual(response["result_sha256"], hashlib.sha256((directory / "result.json").read_bytes()).hexdigest())
+        self.assertNotIn("result_sha256", response)
+        self.assertNotIn("result_sha256", executor._read(directory / "status.json"))
         self.assertIn("experiment output", (directory / "stdout.log").read_text())
+        (directory / "result.json").write_text(json.dumps(response["result"], indent=4) + "\n")
+        self.assertEqual(executor.request(self.config, self.query(payload))["result"], response["result"])
+        # Old persisted hashes are metadata; collection validates the current JSON.
+        status = executor._read(directory / "status.json")
+        executor._write(directory / "status.json", status | {"result_sha256": "0" * 64})
         (directory / "result.json").write_text('{"metrics":{"score":0.5}}')
-        self.assertEqual(executor.request(self.config, self.query(payload))["status"], "unknown")
+        changed = executor.request(self.config, self.query(payload, "collect"))
+        self.assertEqual(changed["status"], "succeeded")
+        self.assertEqual(changed["result"]["metrics"]["score"], 0.5)
+        for invalid in ('{broken', '{"metrics":{"score":NaN}}'):
+            (directory / "result.json").write_text(invalid)
+            self.assertEqual(executor.request(self.config, self.query(payload))["status"], "unknown")
 
     def test_real_nonzero_missing_corrupt_nonfinite_and_oversize_preserved(self):
         scripts = {
@@ -132,23 +141,21 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(executor.request(self.config, payload)["status"], "unknown")
         self.assertFalse((directory / "worker.claim").exists())
 
-    def test_execution_host_manifest_mismatch_prevents_launch(self):
+    def test_changed_execution_source_runs_and_legacy_manifest_is_ignored(self):
         payload = self.payload()
-        Path(payload["argv"][1]).write_text("raise RuntimeError('must not launch')")
+        payload["input_manifest"] = {Path(payload["argv"][1]).name: "0" * 64}
+        Path(payload["argv"][1]).write_text(SUCCESS.replace("0.75", "0.5"))
         executor.request(self.config, payload)
         response = self.complete(payload)
-        self.assertEqual(response["status"], "failed")
-        self.assertIsNone(response["exit_code"])
-        self.assertIn("hash mismatch", response["error"])
-        self.assertFalse((self.root / payload["job_id"] / "stdout.log").exists())
+        self.assertEqual(response["status"], "succeeded")
+        self.assertEqual(response["result"]["metrics"]["score"], 0.5)
 
-    def test_invalid_ids_paths_manifests_and_numbers(self):
+    def test_invalid_ids_paths_and_numbers(self):
         payload = self.payload()
         invalid = [{"job_id": "../outside"}, {"job_id": "-option"}, {"job_root": "relative"},
                    {"job_root": str(self.root) + "/../escape"}, {"timeout_seconds": float("inf")},
-                   {"timeout_seconds": True}, {"timeout_seconds": 0}, {"input_manifest": {}},
-                   {"input_manifest": {"../outside": "a" * 64}}, {"argv": "python3 run.py"},
-                   {"operation": []}, {"input_manifest": {".git/config": "a" * 64}}]
+                   {"timeout_seconds": True}, {"timeout_seconds": 0}, {"cwd": "relative"},
+                   {"argv": "python3 run.py"}, {"operation": []}]
         for fields in invalid:
             with self.subTest(fields=fields), self.assertRaises(ValueError):
                 executor.request(self.config, payload | fields)
@@ -160,7 +167,9 @@ class ExecutorTests(unittest.TestCase):
         payload = self.payload("import time\ntime.sleep(0.2)\n" + SUCCESS)
         response = executor.request(self.config, payload)
         self.assertIn(response["status"], {"preparing", "running"})
-        self.assertEqual(self.complete(payload)["status"], "succeeded")
+        completed = self.complete(payload)
+        self.assertEqual(completed["status"], "succeeded")
+        self.assertNotIn("result_sha256", completed)
 
     def test_real_custom_rejects_wrong_identity_and_illegal_output(self):
         payload = self.query(self.payload())

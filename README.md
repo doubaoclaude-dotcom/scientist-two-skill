@@ -77,7 +77,7 @@ The demo also writes `config.json`, which illustrates the complete controller co
 
 ## Configure real work
 
-Start with the demo's generated `config.json` and the [full configuration/evidence schema](references/workflow.md). Replace the toy objective, baseline, data splits, metric and direction, minimum improvement, statistical rule, guardrails, stopping conditions, and budgets **before** the first experiment. Give data and evaluator identities explicit hashes/version identifiers. `source_manifest` maps the explicitly allowed source/configuration files to SHA-256; include all scientific code, evaluator code, and configuration used by your commands. Do not include credentials, datasets, weights, logs, `.git`, or generated results in a source upload.
+Start with the demo's generated `config.json` and the [full configuration/evidence schema](references/workflow.md). Replace the toy objective, baseline, data splits, metric and direction, minimum improvement, statistical rule, guardrails, stopping conditions, and budgets **before** the first experiment. Record data and evaluator versions. Source and result hash checks are not required by any executor. `source_manifest` is optional controller-local tracking; omit it unless you want local file-change detection. Do not include credentials, datasets, weights, logs, `.git`, or generated results in a source upload.
 
 `commands` holds named argument arrays; the CLI chooses a frozen command instead of accepting untracked shell text. Your experiment writes finite JSON to the path in `SCIENTIST_RESULT_PATH`; `SCIENTIST_JOB_DIR` is available for raw observations and logs. The executor requires numeric `metrics.score`; additional named metrics support the controller's primary metric and guardrails. For example:
 
@@ -125,9 +125,9 @@ scp scripts/executor.py research-host:/srv/scientist/executor.py
 scp examples/experiment.py research-host:/srv/scientist/source/experiment.py
 ```
 
-Adjust those paths to a writable location. The controller's `source_root` is the local approved source tree; `execution.cwd` is its prepared remote counterpart. Freeze matching relative file hashes in `source_manifest` and use remote-valid argv paths. The worker checks hashes on the execution host before running. A local Git commit alone does not establish remote source identity. No automatic directory mirroring or deletion synchronization occurs. An optional absolute `config_file` selects an existing SSH config with `ssh -F`; host-key checking is retained. Authentication stays in existing SSH facilities.
+Adjust those paths to a writable location. The controller's `source_root` is the local approved source tree; `execution.cwd` is its prepared remote counterpart. Use remote-valid argv paths. The worker runs the prepared remote files without checking source or result hashes. A local Git commit alone does not establish remote source identity. No automatic directory mirroring or deletion synchronization occurs. An optional absolute `config_file` selects an existing SSH config with `ssh -F`; host-key checking is retained. Authentication stays in existing SSH facilities. When upgrading an existing deployment, copy the updated `scripts/executor.py` to the remote endpoint as well; the original endpoint still requires checksums.
 
-Use the same `init`, `submit`, and `reconcile` commands with the SSH configuration. Results are returned as JSON; remote raw artifacts stay on the remote host. **Before running a local validator that needs raw artifacts, explicitly collect its allowlisted files and make the validator resolve those local copies.** SSH `collect` is not a general filesystem downloader; a remote-aware validator is another option. Record artifact hashes and provenance in either case.
+Use the same `init`, `submit`, and `reconcile` commands with the SSH configuration. Results are returned as JSON; remote raw artifacts stay on the remote host. **Before running a local validator that needs raw artifacts, explicitly collect its allowlisted files and make the validator resolve those local copies.** SSH `collect` is not a general filesystem downloader; a remote-aware validator is another option. Record where the collected artifacts came from; no remote checksums are required.
 
 **Custom** executes an adapter argv array and exchanges one JSON request/response:
 
@@ -142,10 +142,10 @@ Use the same `init`, `submit`, and `reconcile` commands with the SSH configurati
 ```
 
 ```json
-{"job_id":"study01-h01","status":"succeeded","exit_code":0,"elapsed_seconds":1.2,"job_dir":"/absolute/persistent/jobs/study01-h01","result":{"metrics":{"score":0.75}},"result_sha256":"<64 lowercase hex characters>"}
+{"job_id":"study01-h01","status":"succeeded","exit_code":0,"elapsed_seconds":1.2,"job_dir":"/absolute/persistent/jobs/study01-h01","result":{"metrics":{"score":0.75}}}
 ```
 
-Only protocol JSON belongs on stdout. Put diagnostics on stderr or in job logs. Malformed, oversized, non-finite, mismatched-ID, and invalid-state responses are rejected. The adapter must implement the documented hash contract; a well-formed claimed digest alone is not proof against a dishonest adapter.
+Only protocol JSON belongs on stdout. Put diagnostics on stderr or in job logs. Malformed, oversized, non-finite, mismatched-ID, and invalid-state responses are rejected. The adapter returns process status and valid result JSON; it does not need to compute or return checksums.
 
 ## Gates and recovery
 
@@ -165,7 +165,7 @@ Use `revise --config FILE --reason TEXT` when changing source/configuration/prot
 
 ## Validation, limits, and contributions
 
-Run `python3 -m unittest discover -s tests -v`. Tests exercise local and custom execution, failures/timeouts/corrupt results, duplicate IDs, unknown recovery, budget and gate failures, version drift, crash recovery, and the deterministic five-stage chain. SSH quoting and disconnect parsing have simulated tests. A real isolated localhost SSH test also passed on macOS; it creates disposable keys and a loopback-only server without editing user SSH files. Run it explicitly with `SCIENTIST_TEST_SSH=1 python3 -m unittest discover -s tests -p test_ssh_real.py -v` (requires `sshd` and permission to start it). This does not test a remote cloud environment. CI checks Python 3.10 and 3.14 on Linux. Tests verify observable software behavior, not scientific truth. Local validation on 2026-11-05 passed on Python 3.10.20 and 3.14.6: 38 tests discovered, 37 passed and the opt-in SSH test skipped in each default run; the real SSH test was separately enabled and passed.
+Run `python3 -m unittest discover -s tests -v`. Tests exercise local and custom execution, failures/timeouts/corrupt results, duplicate IDs, unknown recovery, budget and gate failures, version drift, crash recovery, and the deterministic five-stage chain. SSH quoting and disconnect parsing have simulated tests. A real isolated localhost SSH test also passed on macOS; it creates disposable keys and a loopback-only server without editing user SSH files. Run it explicitly with `SCIENTIST_TEST_SSH=1 python3 -m unittest discover -s tests -p test_ssh_real.py -v` (requires `sshd` and permission to start it). This does not test a remote cloud environment. CI checks Python 3.10 and 3.14 on Linux. Tests verify observable software behavior, not scientific truth.
 
 The initial release is intentionally a single-controller, POSIX, file-backed workflow. It has no background agent scheduler, real model benchmark, native Windows support, credential manager, dataset upload system, or automatic remote artifact download. Disk usage of experiment logs/data is not quota-managed. Real training needs your dataset policy, evaluator, frozen benchmark and explicit compute budget. Arbitrary external command dependencies and runtime environments need their own reproducibility records.
 
